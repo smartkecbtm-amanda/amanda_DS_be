@@ -1,0 +1,57 @@
+-- Uji login, kunci 10x gagal, tiket, konteks, idle 1 jam, NON-ACTIVE (memakai data seed)
+\pset pager off
+create function pg_temp.v(p_label text, p_kondisi boolean) returns void language plpgsql as $f$ begin if coalesce(p_kondisi,false) then raise notice 'lulus  %', p_label; else raise notice 'GAGAL  %', p_label; end if; end $f$;
+do $$ declare i int; r jsonb; t text; b jsonb; sid uuid := gen_random_uuid(); begin
+  r := public.verifikasi_login('198203152009012003','amanda123');
+  raise notice '[1] sandi benar: ok=%', r->>'ok';
+  perform pg_temp.v('t02 [1]', r->>'ok'='true');
+  r := public.verifikasi_login('198203152009012003','salahsalah');
+  raise notice '[2] sandi salah (pesan generik): %', r->>'error';
+  perform pg_temp.v('t02 [2]', r->>'ok'='false' and r->>'error' like 'Kredensial%');
+  r := public.verifikasi_login('198601252011011008','amanda123');
+  raise notice '[3] akun NON-ACTIVE: %', r->>'error';
+  perform pg_temp.v('t02 [3]', r->>'error' like 'Kredensial%');
+  r := public.verifikasi_login('999999','amanda123');
+  raise notice '[4] akun tidak ada (pesan sama): %', r->>'error';
+  perform pg_temp.v('t02 [4]', r->>'error' like 'Kredensial%');
+  r := public.verifikasi_login('lestari.auditor@bpkp.go.id','amanda123');
+  raise notice '[5] pengawas akses berakhir: %', r->>'error';
+  perform pg_temp.v('t02 [5]', r->>'error' like '%berakhir%');
+  r := public.verifikasi_login('199002102015042005','amanda123');
+  raise notice '[6] PPTK definitif saat Plh. aktif: %', r->>'error';
+  perform pg_temp.v('t02 [6]', r->>'ok'='false');
+  for i in 1..10 loop perform public.verifikasi_login('198807202012011004','xxxxxx'); end loop;
+  r := public.verifikasi_login('198807202012011004','amanda123');
+  raise notice '[7] setelah 10x gagal, sandi benar: %', r->>'error';
+  perform pg_temp.v('t02 [7]', r->>'error' like '%terkunci%');
+  for i in 1..12 loop perform public.verifikasi_login('admin','xxxxxx'); end loop;
+  r := public.verifikasi_login('admin','amanda123');
+  raise notice '[8] Admin tidak pernah terkunci: ok=%', r->>'ok';
+  perform pg_temp.v('t02 [8]', r->>'ok'='true');
+  update akun_login set locked=false, failed_attempts=0 where username='198807202012011004';
+
+  r := public.verifikasi_login('198203152009012003','amanda123'); t := r->>'tiket';
+  b := public.buka_sesi(t, sid, 'ta-2026','pptk','sek-2026-1');
+  raise notice '[9] konteks yang bukan miliknya: %', b->>'error';
+  perform pg_temp.v('t02 [9]', b->>'ok'='false');
+  b := public.buka_sesi(t, sid, 'ta-2026','bendahara',null);
+  raise notice '[10] konteks sah: ok=% peran=%', b->>'ok', b->>'active_role';
+  perform pg_temp.v('t02 [10]', b->>'ok'='true' and b->>'active_role'='bendahara');
+  b := public.buka_sesi(t, gen_random_uuid(), 'ta-2026','bendahara',null);
+  raise notice '[11] tiket dipakai ulang: %', b->>'error';
+  perform pg_temp.v('t02 [11]', b->>'ok'='false');
+  perform set_config('request.jwt.claims', json_build_object('sub',gen_random_uuid(),'session_id',sid)::text, false);
+  raise notice '[12] sesi_saya peran=%', public.sesi_saya()->>'active_role';
+  perform pg_temp.v('t02 [12]', public.sesi_saya()->>'active_role'='bendahara');
+  update sesi_amanda set terakhir_aktif = now() - interval '61 minutes' where sesi_id = sid;
+  raise notice '[13] idle >1 jam: peran=%', coalesce(amanda.peran(),'NULL');
+  perform pg_temp.v('t02 [13]', amanda.peran() is null);
+  update sesi_amanda set terakhir_aktif = now() where sesi_id = sid;
+  update akun_login set status='NON-ACTIVE' where username='198203152009012003';
+  raise notice '[14] akun dinonaktifkan: peran=%', coalesce(amanda.peran(),'NULL');
+  perform pg_temp.v('t02 [14]', amanda.peran() is null);
+  update akun_login set status='ACTIVE' where username='198203152009012003';
+  perform public.akhiri_sesi();
+  raise notice '[15] setelah logout: peran=%', coalesce(amanda.peran(),'NULL');
+  perform pg_temp.v('t02 [15]', amanda.peran() is null);
+end $$;
